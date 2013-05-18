@@ -279,7 +279,8 @@
                   <version>[1.7.0,)</version>
                 </requireJavaVersion>
                 <requireMavenVersion>
-                  <version>[3.0.5,)</version>
+                  <!-- Netty had this on 3.0.5, but Debian 7 only has 3.0.4 backport -->
+                  <version>[3.0.4,)</version>
                 </requireMavenVersion>
               </rules>
             </configuration>
