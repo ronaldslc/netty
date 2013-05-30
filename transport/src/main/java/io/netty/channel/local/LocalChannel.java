@@ -43,11 +43,28 @@ public class LocalChannel extends AbstractChannel {
 
     private static final ChannelMetadata METADATA = new ChannelMetadata(BufType.MESSAGE, false);
 
+    private static final int MAX_READER_STACK_DEPTH = 8;
+    private static final ThreadLocal<Integer> READER_STACK_DEPTH = new ThreadLocal<Integer>() {
+        @Override
+        protected Integer initialValue() {
+            return 0;
+        }
+    };
+
     private final ChannelConfig config = new DefaultChannelConfig(this);
+    private final Runnable readTask = new Runnable() {
+        @Override
+        public void run() {
+            ChannelPipeline pipeline = pipeline();
+            pipeline.fireInboundBufferUpdated();
+            pipeline.fireChannelReadSuspended();
+        }
+    };
+
     private final Runnable shutdownHook = new Runnable() {
         @Override
         public void run() {
-            unsafe().close(voidPromise());
+            unsafe().close(unsafe().voidPromise());
         }
     };
 
@@ -198,7 +215,7 @@ public class LocalChannel extends AbstractChannel {
     protected void doClose() throws Exception {
         LocalChannel peer = this.peer;
         if (peer != null && peer.isActive()) {
-            peer.unsafe().close(voidPromise());
+            peer.unsafe().close(unsafe().voidPromise());
             this.peer = null;
         }
     }
@@ -206,7 +223,7 @@ public class LocalChannel extends AbstractChannel {
     @Override
     protected Runnable doDeregister() throws Exception {
         if (isOpen()) {
-            unsafe().close(voidPromise());
+            unsafe().close(unsafe().voidPromise());
         }
         ((SingleThreadEventExecutor) eventLoop()).removeShutdownHook(shutdownHook);
         return null;
@@ -225,8 +242,18 @@ public class LocalChannel extends AbstractChannel {
             return;
         }
 
-        pipeline.fireInboundBufferUpdated();
-        pipeline.fireChannelReadSuspended();
+        final Integer stackDepth = READER_STACK_DEPTH.get();
+        if (stackDepth < MAX_READER_STACK_DEPTH) {
+            READER_STACK_DEPTH.set(stackDepth + 1);
+            try {
+                pipeline.fireInboundBufferUpdated();
+                pipeline.fireChannelReadSuspended();
+            } finally {
+                READER_STACK_DEPTH.set(stackDepth);
+            }
+        } else {
+            eventLoop().execute(readTask);
+        }
     }
 
     @Override

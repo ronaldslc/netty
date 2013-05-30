@@ -28,6 +28,9 @@ import java.nio.channels.SelectionKey;
  */
 public abstract class AbstractNioMessageChannel extends AbstractNioChannel {
 
+    // Hard coded for now.
+    private static final int READ_BATCH_SIZE = 16;
+
     /**
      * @see {@link AbstractNioChannel#AbstractNioChannel(Channel, Integer, SelectableChannel, int)}
      */
@@ -47,8 +50,11 @@ public abstract class AbstractNioMessageChannel extends AbstractNioChannel {
             assert eventLoop().inEventLoop();
             final SelectionKey key = selectionKey();
             if (!config().isAutoRead()) {
-                // only remove readInterestOp if needed
-                key.interestOps(key.interestOps() & ~readInterestOp);
+                int interestOps = key.interestOps();
+                if ((interestOps & readInterestOp) != 0) {
+                    // only remove readInterestOp if needed
+                    key.interestOps(interestOps & ~readInterestOp);
+                }
             }
 
             final ChannelPipeline pipeline = pipeline();
@@ -56,40 +62,54 @@ public abstract class AbstractNioMessageChannel extends AbstractNioChannel {
             boolean closed = false;
             boolean read = false;
             boolean firedChannelReadSuspended = false;
-            try {
-                for (;;) {
-                    int localReadAmount = doReadMessages(msgBuf);
-                    if (localReadAmount > 0) {
-                        read = true;
-                    } else if (localReadAmount == 0) {
-                        break;
-                    } else if (localReadAmount < 0) {
-                        closed = true;
-                        break;
+            loop: for (;;) {
+                int reads = 0;
+
+                try {
+                    for (;;) {
+                        int localReadAmount = doReadMessages(msgBuf);
+                        if (localReadAmount > 0) {
+                            read = true;
+                        } else if (localReadAmount == 0) {
+                            break loop;
+                        } else if (localReadAmount < 0) {
+                            closed = true;
+                            break loop;
+                        }
+
+                        if (reads++ > READ_BATCH_SIZE) {
+                            break;
+                        }
+                        if (!config().isAutoRead()) {
+                            break loop;
+                        }
                     }
-                }
-            } catch (Throwable t) {
-                if (read) {
-                    read = false;
-                    pipeline.fireInboundBufferUpdated();
-                }
+                } catch (Throwable t) {
+                    if (read) {
+                        read = false;
+                        pipeline.fireInboundBufferUpdated();
+                    }
 
-                if (t instanceof IOException) {
-                    closed = true;
-                } else if (!closed) {
-                    firedChannelReadSuspended = true;
-                    pipeline.fireChannelReadSuspended();
-                }
+                    if (t instanceof IOException) {
+                        closed = true;
+                    } else if (!closed) {
+                        firedChannelReadSuspended = true;
+                        pipeline.fireChannelReadSuspended();
+                    }
 
-                pipeline().fireExceptionCaught(t);
-            } finally {
-                if (read) {
-                    pipeline.fireInboundBufferUpdated();
-                }
-                if (closed && isOpen()) {
-                    close(voidPromise());
-                } else if (!firedChannelReadSuspended) {
-                    pipeline.fireChannelReadSuspended();
+                    pipeline().fireExceptionCaught(t);
+
+                    // break the loop now
+                    break;
+                } finally {
+                    if (read) {
+                        pipeline.fireInboundBufferUpdated();
+                    }
+                    if (closed && isOpen()) {
+                        close(voidPromise());
+                    } else if (!firedChannelReadSuspended) {
+                        pipeline.fireChannelReadSuspended();
+                    }
                 }
             }
         }
