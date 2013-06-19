@@ -15,18 +15,18 @@
  */
 package io.netty.handler.codec.http;
 
-import io.netty.buffer.BufUtil;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.CompositeByteBuf;
-import io.netty.buffer.MessageBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPipeline;
+import io.netty.channel.MessageList;
 import io.netty.handler.codec.DecoderResult;
 import io.netty.handler.codec.MessageToMessageDecoder;
 import io.netty.handler.codec.TooLongFrameException;
 import io.netty.util.CharsetUtil;
+import io.netty.util.ReferenceCountUtil;
 
 import static io.netty.handler.codec.http.HttpHeaders.*;
 
@@ -108,7 +108,7 @@ public class HttpObjectAggregator extends MessageToMessageDecoder<HttpObject> {
     }
 
     @Override
-    protected void decode(ChannelHandlerContext ctx, HttpObject msg, MessageBuf<Object> out) throws Exception {
+    protected void decode(ChannelHandlerContext ctx, HttpObject msg, MessageList<Object> out) throws Exception {
         FullHttpMessage currentMessage = this.currentMessage;
 
         if (msg instanceof HttpMessage) {
@@ -129,7 +129,7 @@ public class HttpObjectAggregator extends MessageToMessageDecoder<HttpObject> {
             if (!m.getDecoderResult().isSuccess()) {
                 removeTransferEncodingChunked(m);
                 this.currentMessage = null;
-                out.add(BufUtil.retain(m));
+                out.add(ReferenceCountUtil.retain(m));
                 return;
             }
             if (msg instanceof HttpRequest) {
@@ -211,7 +211,29 @@ public class HttpObjectAggregator extends MessageToMessageDecoder<HttpObject> {
     }
 
     @Override
+    public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+        super.channelInactive(ctx);
+
+        // release current message if it is not null as it may be a left-over
+        if (currentMessage != null) {
+            currentMessage.release();
+            currentMessage = null;
+        }
+    }
+
+    @Override
     public void handlerAdded(ChannelHandlerContext ctx) throws Exception {
         this.ctx = ctx;
+    }
+
+    @Override
+    public void handlerRemoved(ChannelHandlerContext ctx) throws Exception {
+        super.handlerRemoved(ctx);
+        // release current message if it is not null as it may be a left-over as there is not much more we can do in
+        // this case
+        if (currentMessage != null) {
+            currentMessage.release();
+            currentMessage = null;
+        }
     }
 }

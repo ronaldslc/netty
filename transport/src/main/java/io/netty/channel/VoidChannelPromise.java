@@ -19,6 +19,7 @@ import io.netty.util.concurrent.AbstractFuture;
 import io.netty.util.concurrent.Future;
 import io.netty.util.concurrent.GenericFutureListener;
 
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.TimeUnit;
 
 final class VoidChannelPromise extends AbstractFuture<Void> implements ChannelPromise {
@@ -40,25 +41,25 @@ final class VoidChannelPromise extends AbstractFuture<Void> implements ChannelPr
     }
 
     @Override
-    public VoidChannelPromise addListener(GenericFutureListener<? extends Future<Void>> listener) {
+    public VoidChannelPromise addListener(GenericFutureListener<? extends Future<? super Void>> listener) {
         fail();
         return this;
     }
 
     @Override
-    public VoidChannelPromise addListeners(GenericFutureListener<? extends Future<Void>>... listeners) {
+    public VoidChannelPromise addListeners(GenericFutureListener<? extends Future<? super Void>>... listeners) {
         fail();
         return this;
     }
 
     @Override
-    public VoidChannelPromise removeListener(GenericFutureListener<? extends Future<Void>> listener) {
+    public VoidChannelPromise removeListener(GenericFutureListener<? extends Future<? super Void>> listener) {
         // NOOP
         return this;
     }
 
     @Override
-    public VoidChannelPromise removeListeners(GenericFutureListener<? extends Future<Void>>... listeners) {
+    public VoidChannelPromise removeListeners(GenericFutureListener<? extends Future<? super Void>>... listeners) {
         // NOOP
         return this;
     }
@@ -117,6 +118,21 @@ final class VoidChannelPromise extends AbstractFuture<Void> implements ChannelPr
     }
 
     @Override
+    public boolean setUncancellable() {
+        return true;
+    }
+
+    @Override
+    public boolean isCancellable() {
+        return false;
+    }
+
+    @Override
+    public boolean isCancelled() {
+        return false;
+    }
+
+    @Override
     public Throwable cause() {
         return null;
     }
@@ -149,6 +165,14 @@ final class VoidChannelPromise extends AbstractFuture<Void> implements ChannelPr
     public boolean tryFailure(Throwable cause) {
         if (fireException) {
             channel.pipeline().fireExceptionCaught(cause);
+        }
+        return false;
+    }
+
+    @Override
+    public boolean cancel(boolean mayInterruptIfRunning) {
+        if (fireException) {
+            channel.pipeline().fireExceptionCaught(new CancellationException());
         }
         return false;
     }

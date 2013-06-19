@@ -16,10 +16,10 @@
 package io.netty.handler.codec.http;
 
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.MessageBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPipeline;
+import io.netty.channel.MessageList;
 import io.netty.handler.codec.DecoderResult;
 import io.netty.handler.codec.ReplayingDecoder;
 import io.netty.handler.codec.TooLongFrameException;
@@ -168,7 +168,7 @@ public abstract class HttpObjectDecoder extends ReplayingDecoder<HttpObjectDecod
     }
 
     @Override
-    protected void decode(ChannelHandlerContext ctx, ByteBuf buffer, MessageBuf<Object> out) throws Exception {
+    protected void decode(ChannelHandlerContext ctx, ByteBuf buffer, MessageList<Object> out) throws Exception {
         switch (state()) {
         case SKIP_CONTROL_CHARS: {
             try {
@@ -420,6 +420,44 @@ public abstract class HttpObjectDecoder extends ReplayingDecoder<HttpObjectDecod
         }
     }
 
+    @Override
+    protected void decodeLast(ChannelHandlerContext ctx, ByteBuf in, MessageList<Object> out) throws Exception {
+        decode(ctx, in, out);
+
+        // Handle the last unfinished message.
+        if (message != null) {
+            // Get the length of the content received so far for the last message.
+            HttpMessage message = this.message;
+            int actualContentLength;
+            if (content != null) {
+                actualContentLength = content.readableBytes();
+            } else {
+                actualContentLength = 0;
+            }
+
+            // Check if the closure of the connection signifies the end of the content.
+            boolean prematureClosure;
+            if (isDecodingRequest()) {
+                // The last request did not wait for a response.
+                prematureClosure = true;
+            } else {
+                // Compare the length of the received content and the 'Content-Length' header.
+                // If the 'Content-Length' header is absent, the length of the content is determined by the end of the
+                // connection, so it is perfectly fine.
+                long expectedContentLength = HttpHeaders.getContentLength(message, -1);
+                prematureClosure = expectedContentLength >= 0 && actualContentLength != expectedContentLength;
+            }
+
+            if (!prematureClosure) {
+                if (actualContentLength == 0) {
+                    out.add(LastHttpContent.EMPTY_LAST_CONTENT);
+                } else {
+                    out.add(new DefaultLastHttpContent(content));
+                }
+            }
+        }
+    }
+
     protected boolean isContentAlwaysEmpty(HttpMessage msg) {
         if (msg instanceof HttpResponse) {
             HttpResponse res = (HttpResponse) msg;
@@ -449,7 +487,8 @@ public abstract class HttpObjectDecoder extends ReplayingDecoder<HttpObjectDecod
     private void reset() {
         reset(null);
     }
-    private void reset(MessageBuf<Object> out) {
+
+    private void reset(MessageList<Object> out) {
         if (out != null) {
             HttpMessage message = this.message;
             ByteBuf content = this.content;
@@ -500,7 +539,7 @@ public abstract class HttpObjectDecoder extends ReplayingDecoder<HttpObjectDecod
         }
     }
 
-    private void readFixedLengthContent(ByteBuf buffer, MessageBuf<Object> out) {
+    private void readFixedLengthContent(ByteBuf buffer, MessageList<Object> out) {
         //we have a content-length so we just read the correct number of bytes
         long length = HttpHeaders.getContentLength(message, -1);
         assert length <= Integer.MAX_VALUE;
