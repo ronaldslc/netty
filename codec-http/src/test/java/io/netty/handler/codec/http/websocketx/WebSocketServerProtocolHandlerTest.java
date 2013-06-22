@@ -17,10 +17,10 @@ package io.netty.handler.codec.http.websocketx;
 
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelOutboundHandlerAdapter;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.MessageList;
+import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.http.DefaultFullHttpRequest;
 import io.netty.handler.codec.http.FullHttpRequest;
@@ -156,13 +156,13 @@ public class WebSocketServerProtocolHandlerTest {
         }
     }
 
-    private static class CustomTextFrameHandler extends ChannelInboundHandlerAdapter {
+    private static class CustomTextFrameHandler extends SimpleChannelInboundHandler<TextWebSocketFrame> {
         private String content;
 
         @Override
-        public void messageReceived(ChannelHandlerContext ctx, MessageList<Object> msgs) throws Exception {
-            assertEquals(1, msgs.size());
-            content = "processed: " + ((TextWebSocketFrame) msgs.get(0)).text();
+        public void messageReceived(ChannelHandlerContext ctx, TextWebSocketFrame msg) throws Exception {
+            assertNull(content);
+            content = "processed: " + msg.text();
         }
 
         String getContent() {

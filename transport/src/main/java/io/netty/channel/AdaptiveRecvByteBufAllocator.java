@@ -44,23 +44,12 @@ public class AdaptiveRecvByteBufAllocator implements RecvByteBufAllocator {
 
     static {
         List<Integer> sizeTable = new ArrayList<Integer>();
-        for (int i = 1; i <= 8; i ++) {
+        for (int i = 16; i < 512; i += 16) {
             sizeTable.add(i);
         }
 
-        for (int i = 4; i < 32; i ++) {
-            long v = 1L << i;
-            long inc = v >>> 4;
-            v -= inc << 3;
-
-            for (int j = 0; j < 8; j ++) {
-                v += inc;
-                if (v > Integer.MAX_VALUE) {
-                    sizeTable.add(Integer.MAX_VALUE);
-                } else {
-                    sizeTable.add((int) v);
-                }
-            }
+        for (int i = 512; i > 0; i <<= 1) {
+            sizeTable.add(i);
         }
 
         SIZE_TABLE = new int[sizeTable.size()];
@@ -72,28 +61,27 @@ public class AdaptiveRecvByteBufAllocator implements RecvByteBufAllocator {
     public static final AdaptiveRecvByteBufAllocator DEFAULT = new AdaptiveRecvByteBufAllocator();
 
     private static int getSizeTableIndex(final int size) {
-        if (size <= 16) {
-            return size - 1;
-        }
+        for (int low = 0, high = SIZE_TABLE.length - 1;;) {
+            if (high < low) {
+                return low;
+            }
+            if (high == low) {
+                return high;
+            }
 
-        int bits = 0;
-        int v = size;
-        do {
-            v >>>= 1;
-            bits ++;
-        } while (v != 0);
-
-        final int baseIdx = bits << 3;
-        final int startIdx = baseIdx - 18;
-        final int endIdx = baseIdx - 25;
-
-        for (int i = startIdx; i >= endIdx; i --) {
-            if (size >= SIZE_TABLE[i]) {
-                return i;
+            int mid = low + high >>> 1;
+            int a = SIZE_TABLE[mid];
+            int b = SIZE_TABLE[mid + 1];
+            if (size > b) {
+                low = mid + 1;
+            } else if (size < a) {
+                high = mid - 1;
+            } else if (size == a) {
+                return mid;
+            } else {
+                return mid + 1;
             }
         }
-
-        throw new Error("shouldn't reach here; please file a bug report.");
     }
 
     private static final class HandleImpl implements Handle {

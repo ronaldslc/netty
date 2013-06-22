@@ -23,8 +23,6 @@ import io.netty.util.internal.logging.InternalLoggerFactory;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.lang.management.ManagementFactory;
-import java.lang.management.RuntimeMXBean;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.net.InetSocketAddress;
@@ -356,7 +354,11 @@ public final class PlatformDependent {
                     }
                 }
                 if (p != null) {
-                    p.destroy();
+                    try {
+                        p.destroy();
+                    } catch (Exception e) {
+                        // Android sometimes triggers an ErrnoException.
+                    }
                 }
             }
 
@@ -496,10 +498,22 @@ public final class PlatformDependent {
             // Ignore
         }
 
-        if (maxDirectMemory <= 0) {
+        if (maxDirectMemory > 0) {
+            return maxDirectMemory;
+        }
+
+        try {
             // Now try to get the JVM option (-XX:MaxDirectMemorySize) and parse it.
-            RuntimeMXBean runtime = ManagementFactory.getRuntimeMXBean();
-            List<String> vmArgs = runtime.getInputArguments();
+            // Note that we are using reflection because Android doesn't have these classes.
+            Class<?> mgmtFactoryClass = Class.forName(
+                    "java.lang.management.ManagementFactory", true, ClassLoader.getSystemClassLoader());
+            Class<?> runtimeClass = Class.forName(
+                    "java.lang.management.RuntimeMXBean", true, ClassLoader.getSystemClassLoader());
+
+            Object runtime = mgmtFactoryClass.getDeclaredMethod("getRuntimeMXBean").invoke(null);
+
+            @SuppressWarnings("unchecked")
+            List<String> vmArgs = (List<String>) runtimeClass.getDeclaredMethod("getInputArguments").invoke(runtime);
             for (int i = vmArgs.size() - 1; i >= 0; i --) {
                 Matcher m = MAX_DIRECT_MEMORY_SIZE_ARG_PATTERN.matcher(vmArgs.get(i));
                 if (!m.matches()) {
@@ -520,6 +534,8 @@ public final class PlatformDependent {
                 }
                 break;
             }
+        } catch (Throwable t) {
+            // Ignore
         }
 
         if (maxDirectMemory <= 0) {

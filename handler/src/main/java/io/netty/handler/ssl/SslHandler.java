@@ -392,30 +392,40 @@ public class SslHandler
             ctx.write(msgs, promise);
             return;
         }
-        for (int i = 0; i < msgs.size(); i++) {
-            ByteBuf msg = (ByteBuf) msgs.get(i);
-            ChannelPromise cp;
-            if (i + 1 == msgs.size()) {
-                cp = promise;
+        try {
+            if (msgs.isEmpty()) {
+                // if the MessageList is empty we need to add an empty buffer as pending write as otherwise
+                // the promise will never be notified.
+                // See https://github.com/netty/netty/issues/1475
+                pendingUnencryptedWrites.add(new PendingWrite(Unpooled.EMPTY_BUFFER, promise));
             } else {
-                cp = ctx.newPromise();
+                for (int i = 0; i < msgs.size(); i++) {
+                    ByteBuf msg = (ByteBuf) msgs.get(i);
+                    ChannelPromise cp;
+                    if (i + 1 == msgs.size()) {
+                        cp = promise;
+                    } else {
+                        cp = ctx.newPromise();
+                    }
+                    pendingUnencryptedWrites.add(new PendingWrite(msg, cp));
+                }
             }
-            pendingUnencryptedWrites.add(new PendingWrite(msg, cp));
+            flush0(ctx);
+        } finally {
+            msgs.recycle();
         }
-        flush0(ctx);
     }
 
     private void flush0(ChannelHandlerContext ctx) throws SSLException {
-
         boolean unwrapLater = false;
-        PendingWrite pending = null;
         ByteBuf out = null;
+        ChannelPromise promise = null;
         try {
             for (;;) {
                 if (out == null) {
                     out = ctx.alloc().buffer();
                 }
-                pending = pendingUnencryptedWrites.peek();
+                PendingWrite pending = pendingUnencryptedWrites.peek();
                 if (pending == null) {
                     break;
                 }
@@ -423,7 +433,10 @@ public class SslHandler
 
                 if (!pending.buf.isReadable()) {
                     pending.buf.release();
+                    promise = pending.promise;
                     pendingUnencryptedWrites.remove();
+                } else {
+                    promise = null;
                 }
 
                 if (result.getStatus() == Status.CLOSED) {
@@ -445,8 +458,9 @@ public class SslHandler
                 } else {
                     switch (result.getHandshakeStatus()) {
                         case NEED_WRAP:
-                            if (!pending.buf.isReadable()) {
-                                ctx.write(out, pending.promise);
+                            if (promise != null) {
+                                ctx.write(out, promise);
+                                promise = null;
                             } else {
                                 ctx.write(out);
                             }
@@ -488,14 +502,14 @@ public class SslHandler
             throw e;
         } finally {
             if (out != null && out.isReadable()) {
-                if (pending != null && !pending.buf.isReadable()) {
-                    ctx.write(out, pending.promise);
+                if (promise != null) {
+                    ctx.write(out, promise);
                 } else {
                     ctx.write(out);
                 }
                 out = null;
-            } else if (pending != null && !pending.buf.isReadable()) {
-                pending.promise.setSuccess();
+            } else if (promise != null) {
+                promise.trySuccess();
             }
             if (out != null) {
                 out.release();
