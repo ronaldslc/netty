@@ -687,6 +687,7 @@ final class UnreleasableByteBuf implements ByteBuf {
     }
 
     @Override
+    @Deprecated
     public int indexOf(int fromIndex, int toIndex, ByteBufIndexFinder indexFinder) {
         return buf.indexOf(fromIndex, toIndex, indexFinder);
     }
@@ -697,6 +698,7 @@ final class UnreleasableByteBuf implements ByteBuf {
     }
 
     @Override
+    @Deprecated
     public int bytesBefore(ByteBufIndexFinder indexFinder) {
         return buf.bytesBefore(indexFinder);
     }
@@ -707,6 +709,7 @@ final class UnreleasableByteBuf implements ByteBuf {
     }
 
     @Override
+    @Deprecated
     public int bytesBefore(int length, ByteBufIndexFinder indexFinder) {
         return buf.bytesBefore(length, indexFinder);
     }
@@ -717,8 +720,29 @@ final class UnreleasableByteBuf implements ByteBuf {
     }
 
     @Override
+    @Deprecated
     public int bytesBefore(int index, int length, ByteBufIndexFinder indexFinder) {
         return buf.bytesBefore(index, length, indexFinder);
+    }
+
+    @Override
+    public int forEachByte(ByteBufProcessor processor) {
+        return buf.forEachByte(processor);
+    }
+
+    @Override
+    public int forEachByte(int index, int length, ByteBufProcessor processor) {
+        return buf.forEachByte(index, length, processor);
+    }
+
+    @Override
+    public int forEachByteDesc(ByteBufProcessor processor) {
+        return buf.forEachByteDesc(processor);
+    }
+
+    @Override
+    public int forEachByteDesc(int index, int length, ByteBufProcessor processor) {
+        return buf.forEachByteDesc(index, length, processor);
     }
 
     @Override

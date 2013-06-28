@@ -29,10 +29,26 @@ import java.util.Iterator;
 import java.util.NoSuchElementException;
 
 /**
- * Datastructure which holds messages.
+ * A simple array-backed list that holds one or more messages.
  *
- * You should call {@link #recycle()} once you are done with using it.
- * @param <T>
+ * <h3>Recycling a {@link MessageList}</h3>
+ * <p>
+ * A {@link MessageList} is internally managed by a thread-local object pool to keep the GC pressure minimal.
+ * To return the {@link MessageList} to the pool, you must call one of the following methods: {@link #recycle()},
+ * {@link #releaseAllAndRecycle()}, or {@link #releaseAllAndRecycle(int)}.  If the list is returned to the pool (i.e.
+ * recycled), it will be reused when you attempts to get a {@link MessageList} via {@link #newInstance()}.
+ * </p><p>
+ * If you don't think recycling a {@link MessageList} isn't worth, it is also fine not to recycle it.  Because of this
+ * relaxed contract, you can also decide not to wrap your code with a {@code try-finally} block only to recycle a
+ * list.  However, if you decided to recycle it, you must keep in mind that:
+ * <ul>
+ * <li>you must make sure you do not access the list once it has been recycled.</li>
+ * <li>If you are given with a {@link MessageList} as a parameter of your handler, it means it is your handler's
+ *     responsibility to release the messages in it and to recycle it.</li>
+ * </ul>
+ * </p>
+ *
+ * @param <T> the type of the contained messages
  */
 public final class MessageList<T> implements Iterable<T> {
 
@@ -103,7 +119,7 @@ public final class MessageList<T> implements Iterable<T> {
     public boolean releaseAll() {
         boolean releasedAll = true;
         int size = this.size;
-        for (int i = 0; i < size; i++) {
+        for (int i = 0; i < size; i ++) {
             releasedAll &= ReferenceCountUtil.release(elements[i]);
         }
         return releasedAll;
@@ -116,7 +132,7 @@ public final class MessageList<T> implements Iterable<T> {
     public boolean releaseAll(int decrement) {
         boolean releasedAll = true;
         int size = this.size;
-        for (int i = 0; i < size; i++) {
+        for (int i = 0; i < size; i ++) {
             releasedAll &= ReferenceCountUtil.release(elements[i], decrement);
         }
         return releasedAll;
@@ -187,7 +203,7 @@ public final class MessageList<T> implements Iterable<T> {
      * no message stored in the given index.
      */
     public T get(int index) {
-        checkExclusive(index);
+        checkIndex(index);
         return elements[index];
     }
 
@@ -195,7 +211,7 @@ public final class MessageList<T> implements Iterable<T> {
      * Sets the message on the given index.
      */
     public MessageList<T> set(int index, T value) {
-        checkExclusive(index);
+        checkIndex(index);
         if (value == null) {
             throw new NullPointerException("value");
         }
@@ -210,7 +226,7 @@ public final class MessageList<T> implements Iterable<T> {
         if (value == null) {
             throw new NullPointerException("value");
         }
-        modifications++;
+        modifications ++;
         int oldSize = size;
         int newSize = oldSize + 1;
         ensureCapacity(newSize);
@@ -237,22 +253,53 @@ public final class MessageList<T> implements Iterable<T> {
      * and return itself.
      */
     public MessageList<T> add(T[] src, int srcIdx, int srcLen) {
-        checkElements(src, srcIdx, srcLen);
+        if (src == null) {
+            throw new NullPointerException("src");
+        }
 
-        modifications++;
-        int oldSize = size;
-        int newSize = oldSize + srcLen;
+        modifications ++;
+
+        int dstIdx = size;
+        final int newSize = dstIdx + srcLen;
         ensureCapacity(newSize);
-        System.arraycopy(src, srcIdx, elements, oldSize, srcLen);
-        size = newSize;
-        if (byteBufsOnly) {
-            for (int i = srcIdx; i < srcIdx; i++) {
-                if (!(src[i] instanceof ByteBuf)) {
-                    byteBufsOnly = false;
-                    break;
+
+        final int srcEndIdx = srcIdx + srcLen;
+        int i = srcIdx;
+        try {
+            if (byteBufsOnly) {
+                while (i < srcEndIdx) {
+                    T m = src[srcIdx];
+                    if (m == null) {
+                        throw new NullPointerException("src[" + srcIdx + ']');
+                    }
+
+                    elements[dstIdx ++] = m;
+                    i ++;
+
+                    if (!(m instanceof ByteBuf)) {
+                        byteBufsOnly = false;
+                        break;
+                    }
                 }
             }
+
+            for (; i < srcEndIdx; i ++) {
+                T m = src[srcIdx];
+                if (m == null) {
+                    throw new NullPointerException("src[" + srcIdx + ']');
+                }
+
+                elements[dstIdx ++] = m;
+            }
+        } finally {
+            if (dstIdx != newSize) {
+                // Could not finish iteration.
+                Arrays.fill(elements, size, dstIdx, null);
+            }
         }
+
+        assert dstIdx == newSize : String.format("dstIdx(%d) != newSize(%d)", dstIdx, newSize);
+        size = newSize;
 
         return this;
     }
@@ -268,15 +315,34 @@ public final class MessageList<T> implements Iterable<T> {
      * Add the messages contained in the given {@link MessageList}, using the given src index and src length, to this
      * {@link MessageList} and return itself.
      */
-    public MessageList<T> add(MessageList<T>  src, int srcIdx, int srcLen) {
-        return add(src.elements, srcIdx, srcLen);
+    public MessageList<T> add(MessageList<T> src, int srcIdx, int srcLen) {
+        if (src == null) {
+            throw new NullPointerException("src");
+        }
+
+        if (srcIdx > src.size - srcLen) {
+            throw new IndexOutOfBoundsException(String.format(
+                    "srcIdx(%d) + srcLen(%d) > src.size(%d)", srcIdx, srcLen, src.size));
+        }
+
+        modifications ++;
+
+        final int dstIdx = size;
+        final int newSize = dstIdx + srcLen;
+        ensureCapacity(newSize);
+
+        byteBufsOnly &= src.byteBufsOnly;
+        System.arraycopy(src.elements, srcIdx, elements, dstIdx, srcLen);
+
+        size = newSize;
+        return this;
     }
 
     /**
      * Clear all messages and return itself.
      */
     public MessageList<T> clear() {
-        modifications++;
+        modifications ++;
         Arrays.fill(elements, 0, size, null);
         byteBufsOnly = true;
         size = 0;
@@ -302,61 +368,116 @@ public final class MessageList<T> implements Iterable<T> {
         return copy;
     }
 
+    /**
+     * Casts the type parameter of this list to a different type parameter.  This method is often useful when you have
+     * to deal with multiple messages and do not want to down-cast the messages every time you access the list.
+     *
+     * <pre>
+     * public void messageReceived(ChannelHandlerContext ctx, MessageList&lt;Object&gt; msgs) {
+     *     MessageList&lt;MyMessage&gt; cast = msgs.cast();
+     *     for (MyMessage m: cast) { // or: for (MyMessage m: msgs.&lt;MyMessage&gt;cast())
+     *         ...
+     *     }
+     * }
+     * </pre>
+     */
     @SuppressWarnings("unchecked")
     public <U> MessageList<U> cast() {
         return (MessageList<U>) this;
     }
 
-    public boolean forEach(MessageListProcessor<? super T> proc) {
+    /**
+     * Iterates over the messages in this list with the specified {@code processor}.
+     *
+     * @return {@code -1} if the processor iterated to or beyond the end of the readable bytes.
+     *         If the {@code processor} raised {@link MessageListProcessor#ABORT}, the last-visited index will be
+     *         returned.
+     */
+    public int forEach(MessageListProcessor<? super T> proc) {
         if (proc == null) {
             throw new NullPointerException("proc");
+        }
+
+        final int size = this.size;
+        if (size == 0) {
+            return -1;
         }
 
         @SuppressWarnings("unchecked")
         MessageListProcessor<T> p = (MessageListProcessor<T>) proc;
 
-        int size = this.size;
+        int i = 0;
         try {
-            for (int i = 0; i < size; i ++) {
-                i += p.process(this, i, elements[i]);
-            }
+            do {
+                i += p.process(elements[i]);
+            } while (i < size);
         } catch (Signal abort) {
             abort.expect(MessageListProcessor.ABORT);
-            return false;
+            return i;
         } catch (Exception e) {
             PlatformDependent.throwException(e);
         }
 
-        return true;
+        return -1;
     }
 
-    public boolean forEach(int index, int length, MessageListProcessor<? super T> proc) {
+    /**
+     * Iterates over the messages in this list with the specified {@code processor}.
+     *
+     * @return {@code -1} if the processor iterated to or beyond the end of the specified area.
+     *         If the {@code processor} raised {@link MessageListProcessor#ABORT}, the last-visited index will be
+     *         returned.
+     */
+    public int forEach(int index, int length, MessageListProcessor<? super T> proc) {
         checkRange(index, length);
         if (proc == null) {
             throw new NullPointerException("proc");
         }
 
+        if (size == 0) {
+            return -1;
+        }
+
         @SuppressWarnings("unchecked")
         MessageListProcessor<T> p = (MessageListProcessor<T>) proc;
 
-        int end = index + length;
+        final int end = index + length;
+
+        int i = index;
         try {
-            for (int i = index; i < end;) {
-                i += p.process(this, i, elements[i]);
-            }
+            do {
+                i += p.process(elements[i]);
+            } while (i < end);
         } catch (Signal abort) {
             abort.expect(MessageListProcessor.ABORT);
-            return false;
+            return i;
         } catch (Exception e) {
             PlatformDependent.throwException(e);
         }
 
-        return true;
+        return -1;
     }
 
     @Override
     public Iterator<T> iterator() {
         return new MessageListIterator();
+    }
+
+    /**
+     * Returns the backing array of this list.  Use this array when you want to iterate over the list fast:
+     * <pre>
+     * {@link MessageList} list = ...;
+     * for (Object m: list.array()) {
+     *     if (m == null) {
+     *         break;
+     *     }
+     *
+     *     handleMessage(m);
+     * }
+     * </pre>
+     */
+    public T[] array() {
+        return elements;
     }
 
     /**
@@ -408,7 +529,7 @@ public final class MessageList<T> implements Iterable<T> {
         return (T[]) new Object[initialCapacity];
     }
 
-    private void checkExclusive(int index) {
+    private void checkIndex(int index) {
         if (index >= size) {
             throw new IndexOutOfBoundsException(String.valueOf(index));
         }
@@ -417,18 +538,6 @@ public final class MessageList<T> implements Iterable<T> {
     private void checkRange(int index, int length) {
         if (index + length > size) {
             throw new IndexOutOfBoundsException("index: " + index + ", length: " + length + ", size: " + size);
-        }
-    }
-
-    private void checkElements(T[] src, int srcIdx, int srcLen) {
-        if (src == null) {
-            throw new NullPointerException("src");
-        }
-        int end = srcIdx + srcLen;
-        for (int i = srcIdx; i < end; i ++) {
-            if (src[i] == null) {
-                throw new NullPointerException("src[" + i + ']');
-            }
         }
     }
 
@@ -454,14 +563,14 @@ public final class MessageList<T> implements Iterable<T> {
         public T next() {
             checkConcurrentModifications();
             if (hasNext()) {
-                return elements[index++];
+                return elements[index ++];
             }
             throw new NoSuchElementException();
         }
 
         @Override
         public void remove() {
-           throw new UnsupportedOperationException("Read-Only");
+           throw new UnsupportedOperationException();
         }
     }
 }
