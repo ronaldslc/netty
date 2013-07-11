@@ -20,7 +20,6 @@ import io.netty.buffer.ByteBufHolder;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
-import io.netty.channel.MessageList;
 import io.netty.channel.ServerChannel;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.concurrent.EventExecutor;
@@ -199,6 +198,7 @@ public class DefaultChannelGroup extends AbstractSet<Channel> implements Channel
         }
 
         Map<Channel, ChannelFuture> futures = new LinkedHashMap<Channel, ChannelFuture>(size());
+
         for (Channel c: nonServerChannels) {
             futures.put(c, c.write(safeDuplicate(message)));
         }
@@ -208,22 +208,23 @@ public class DefaultChannelGroup extends AbstractSet<Channel> implements Channel
     }
 
     @Override
-    public ChannelGroupFuture write(MessageList<Object> messages) {
-        if (messages == null) {
-            throw new NullPointerException("messages");
-        }
-
-        Map<Channel, ChannelFuture> futures = new LinkedHashMap<Channel, ChannelFuture>(size());
+    public ChannelGroup flush() {
         for (Channel c: nonServerChannels) {
-            int size = messages.size();
-            MessageList<Object> messageCopy = MessageList.newInstance(size);
-            for (int i = 0 ; i < size; i++) {
-                messageCopy.add(safeDuplicate(messages.get(i)));
-            }
-            futures.put(c, c.write(messageCopy));
+            c.flush();
+        }
+        return this;
+    }
+
+    @Override
+    public ChannelGroupFuture flushAndWrite(Object message) {
+        Map<Channel, ChannelFuture> futures = new LinkedHashMap<Channel, ChannelFuture>(size());
+
+        for (Channel c: nonServerChannels) {
+            futures.put(c, c.writeAndFlush(safeDuplicate(message)));
         }
 
-        messages.releaseAllAndRecycle();
+        ReferenceCountUtil.release(message);
+
         return new DefaultChannelGroupFuture(this, futures, executor);
     }
 

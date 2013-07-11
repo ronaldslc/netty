@@ -23,7 +23,6 @@ import io.netty.channel.ChannelException;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelMetadata;
 import io.netty.channel.ChannelPromise;
-import io.netty.channel.MessageList;
 import io.netty.channel.RecvByteBufAllocator;
 import io.netty.channel.oio.AbstractOioMessageChannel;
 import io.netty.channel.socket.DatagramChannel;
@@ -45,6 +44,7 @@ import java.net.NetworkInterface;
 import java.net.SocketAddress;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
+import java.util.List;
 import java.util.Locale;
 
 /**
@@ -88,17 +88,7 @@ public class OioDatagramChannel extends AbstractOioMessageChannel
      * @param socket    the {@link MulticastSocket} which is used by this instance
      */
     public OioDatagramChannel(MulticastSocket socket) {
-        this(null, socket);
-    }
-
-    /**
-     * Create a new instance from the given {@link MulticastSocket}.
-     *
-     * @param id        the id which should be used for this instance or {@code null} if a new one should be generated
-     * @param socket    the {@link MulticastSocket} which is used by this instance
-     */
-    public OioDatagramChannel(Integer id, MulticastSocket socket) {
-        super(null, id);
+        super(null);
 
         boolean success = false;
         try {
@@ -201,7 +191,7 @@ public class OioDatagramChannel extends AbstractOioMessageChannel
     }
 
     @Override
-    protected int doReadMessages(MessageList<Object> buf) throws Exception {
+    protected int doReadMessages(List<Object> buf) throws Exception {
         DatagramChannelConfig config = config();
         RecvByteBufAllocator.Handle allocHandle = this.allocHandle;
         if (allocHandle == null) {
@@ -243,8 +233,8 @@ public class OioDatagramChannel extends AbstractOioMessageChannel
     }
 
     @Override
-    protected int doWrite(MessageList<Object> msgs, int index) throws Exception {
-        final Object o = msgs.get(index);
+    protected int doWrite(Object[] msgs, int msgsLength, int startIndex) throws Exception {
+        final Object o = msgs[startIndex];
         final Object m;
         final ByteBuf data;
         final SocketAddress remoteAddress;

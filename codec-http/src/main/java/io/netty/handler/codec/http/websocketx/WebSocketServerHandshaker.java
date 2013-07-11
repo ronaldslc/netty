@@ -155,10 +155,10 @@ public abstract class WebSocketServerHandshaker {
                                             HttpHeaders responseHeaders, final ChannelPromise promise) {
 
         if (logger.isDebugEnabled()) {
-            logger.debug(String.format("Channel %s WS Version %s server handshake", version(), channel.hashCode()));
+            logger.debug(String.format("%s WS Version %s server handshake", channel, version()));
         }
         FullHttpResponse response = newHandshakeResponse(req, responseHeaders);
-        channel.write(response).addListener(new ChannelFutureListener() {
+        channel.writeAndFlush(response).addListener(new ChannelFutureListener() {
             @Override
             public void operationComplete(ChannelFuture future) throws Exception {
                 if (future.isSuccess()) {
@@ -225,7 +225,7 @@ public abstract class WebSocketServerHandshaker {
         if (channel == null) {
             throw new NullPointerException("channel");
         }
-        return channel.write(frame, promise).addListener(ChannelFutureListener.CLOSE);
+        return channel.writeAndFlush(frame, promise).addListener(ChannelFutureListener.CLOSE);
     }
 
     /**

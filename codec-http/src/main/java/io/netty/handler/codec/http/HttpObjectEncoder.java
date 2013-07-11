@@ -17,10 +17,10 @@ package io.netty.handler.codec.http;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.MessageList;
 import io.netty.handler.codec.MessageToMessageEncoder;
 import io.netty.util.CharsetUtil;
 
+import java.util.List;
 import java.util.Map;
 
 import static io.netty.handler.codec.http.HttpConstants.*;
@@ -52,7 +52,7 @@ public abstract class HttpObjectEncoder<H extends HttpMessage> extends MessageTo
     private int state = ST_INIT;
 
     @Override
-    protected void encode(ChannelHandlerContext ctx, HttpObject msg, MessageList<Object> out) throws Exception {
+    protected void encode(ChannelHandlerContext ctx, HttpObject msg, List<Object> out) throws Exception {
         if (msg instanceof HttpMessage) {
             if (state != ST_INIT) {
                 throw new IllegalStateException("unexpected message type: " + msg.getClass().getSimpleName());
@@ -130,7 +130,7 @@ public abstract class HttpObjectEncoder<H extends HttpMessage> extends MessageTo
         buf.writeBytes(CRLF);
     }
 
-    private static void encodeAscii(String s, ByteBuf buf) {
+    protected static void encodeAscii(String s, ByteBuf buf) {
         for (int i = 0; i < s.length(); i++) {
             buf.writeByte(s.charAt(i));
         }
