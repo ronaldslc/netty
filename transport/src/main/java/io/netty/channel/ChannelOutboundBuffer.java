@@ -212,10 +212,16 @@ final class ChannelOutboundBuffer {
     }
 
     void clearUnflushed(Throwable cause) {
+        if (inFail) {
+            return;
+        }
+
         MessageList unflushed = unflushedMessageList;
         if (unflushed == null) {
             return;
         }
+
+        inFail = true;
 
         // Release all unflushed messages.
         Object[] messages = unflushed.messages();
@@ -223,18 +229,13 @@ final class ChannelOutboundBuffer {
         final int size = unflushed.size();
         try {
             for (int i = 0; i < size; i++) {
-                ReferenceCountUtil.release(messages[i]);
-                ChannelPromise p = promises[i];
-                if (!(p instanceof VoidChannelPromise)) {
-                    if (!p.tryFailure(cause)) {
-                        logger.warn("Promise done already: {} - new exception is:", p, cause);
-                    }
-                }
+                safeRelease(messages[i], promises[i], cause);
             }
         } finally {
             unflushed.recycle();
             decrementPendingOutboundBytes(unflushedMessageListSize);
             unflushedMessageListSize = 0;
+            inFail = false;
         }
     }
 
@@ -271,11 +272,7 @@ final class ChannelOutboundBuffer {
                     final int size = current.size();
                     try {
                         for (int i = currentMessageIndex; i < size; i++) {
-                            ReferenceCountUtil.release(messages[i]);
-                            ChannelPromise p = promises[i];
-                            if (!(p instanceof VoidChannelPromise) && !p.tryFailure(cause)) {
-                                logger.warn("Promise done already: {} - new exception is:", p, cause);
-                            }
+                            safeRelease(messages[i], promises[i], cause);
                         }
                     } finally {
                         current.recycle();
@@ -284,6 +281,19 @@ final class ChannelOutboundBuffer {
             } while(next());
         } finally {
             inFail = false;
+        }
+    }
+
+    private static void safeRelease(Object message, ChannelPromise promise, Throwable cause) {
+        try {
+            ReferenceCountUtil.release(message);
+        } catch (Throwable t) {
+            logger.warn("Failed to release a message.", t);
+        }
+
+        ChannelPromise p = promise;
+        if (!(p instanceof VoidChannelPromise) && !p.tryFailure(cause)) {
+            logger.warn("Promise done already: {} - new exception is:", p, cause);
         }
     }
 }
