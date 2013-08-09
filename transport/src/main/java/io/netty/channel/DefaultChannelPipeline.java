@@ -55,7 +55,7 @@ final class DefaultChannelPipeline implements ChannelPipeline {
         }
     }
 
-    final Channel channel;
+    final AbstractChannel channel;
 
     final DefaultChannelHandlerContext head;
     final DefaultChannelHandlerContext tail;
@@ -66,7 +66,7 @@ final class DefaultChannelPipeline implements ChannelPipeline {
     final Map<EventExecutorGroup, EventExecutor> childExecutors =
             new IdentityHashMap<EventExecutorGroup, EventExecutor>();
 
-    public DefaultChannelPipeline(Channel channel) {
+    public DefaultChannelPipeline(AbstractChannel channel) {
         if (channel == null) {
             throw new NullPointerException("channel");
         }
@@ -764,10 +764,6 @@ final class DefaultChannelPipeline implements ChannelPipeline {
 
     @Override
     public ChannelPipeline fireChannelInactive() {
-        // Some implementations such as EmbeddedChannel can trigger inboundBufferUpdated()
-        // after deactivation, so it's safe not to revert the firedChannelActive flag here.
-        // Also, all known transports never get re-activated.
-        //firedChannelActive = false;
         head.fireChannelInactive();
         return this;
     }
