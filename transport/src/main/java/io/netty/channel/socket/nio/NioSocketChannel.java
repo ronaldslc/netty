@@ -28,8 +28,6 @@ import io.netty.channel.nio.AbstractNioByteChannel;
 import io.netty.channel.socket.DefaultSocketChannelConfig;
 import io.netty.channel.socket.ServerSocketChannel;
 import io.netty.channel.socket.SocketChannelConfig;
-import io.netty.util.internal.logging.InternalLogger;
-import io.netty.util.internal.logging.InternalLoggerFactory;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -45,8 +43,6 @@ public class NioSocketChannel extends AbstractNioByteChannel implements io.netty
 
     private static final ChannelMetadata METADATA = new ChannelMetadata(false);
 
-    private static final InternalLogger logger = InternalLoggerFactory.getInstance(NioSocketChannel.class);
-
     private static SocketChannel newSocket() {
         try {
             return SocketChannel.open();
@@ -60,15 +56,15 @@ public class NioSocketChannel extends AbstractNioByteChannel implements io.netty
     /**
      * Create a new instance
      */
-    public NioSocketChannel() {
-        this(newSocket());
+    public NioSocketChannel(EventLoop eventLoop) {
+        this(eventLoop, newSocket());
     }
 
     /**
      * Create a new instance using the given {@link SocketChannel}.
      */
-    public NioSocketChannel(SocketChannel socket) {
-        this(null, socket);
+    public NioSocketChannel(EventLoop eventLoop, SocketChannel socket) {
+        this(null, eventLoop, socket);
     }
 
     /**
@@ -77,23 +73,8 @@ public class NioSocketChannel extends AbstractNioByteChannel implements io.netty
      * @param parent    the {@link Channel} which created this instance or {@code null} if it was created by the user
      * @param socket    the {@link SocketChannel} which will be used
      */
-    public NioSocketChannel(Channel parent, SocketChannel socket) {
-        super(parent, socket);
-        try {
-            socket.configureBlocking(false);
-        } catch (IOException e) {
-            try {
-                socket.close();
-            } catch (IOException e2) {
-                if (logger.isWarnEnabled()) {
-                    logger.warn(
-                            "Failed to close a partially initialized socket.", e2);
-                }
-            }
-
-            throw new ChannelException("Failed to enter non-blocking mode.", e);
-        }
-
+    public NioSocketChannel(Channel parent, EventLoop eventLoop, SocketChannel socket) {
+        super(parent, eventLoop, socket);
         config = new DefaultSocketChannelConfig(this, socket.socket());
     }
 
@@ -264,9 +245,11 @@ public class NioSocketChannel extends AbstractNioByteChannel implements io.netty
             final SocketChannel ch = javaChannel();
             long writtenBytes = 0;
             boolean done = false;
+            boolean setOpWrite = false;
             for (int i = config().getWriteSpinCount() - 1; i >= 0; i --) {
                 final long localWrittenBytes = ch.write(nioBuffers, 0, nioBufferCnt);
                 if (localWrittenBytes == 0) {
+                    setOpWrite = true;
                     break;
                 }
                 expectedWrittenBytes -= localWrittenBytes;
@@ -298,19 +281,21 @@ public class NioSocketChannel extends AbstractNioByteChannel implements io.netty
                     final int readableBytes = buf.writerIndex() - readerIndex;
 
                     if (readableBytes < writtenBytes) {
+                        in.progress(readableBytes);
                         in.remove();
                         writtenBytes -= readableBytes;
                     } else if (readableBytes > writtenBytes) {
                         buf.readerIndex(readerIndex + (int) writtenBytes);
                         in.progress(writtenBytes);
                         break;
-                    } else { // readable == writtenBytes
+                    } else { // readableBytes == writtenBytes
+                        in.progress(readableBytes);
                         in.remove();
                         break;
                     }
                 }
 
-                setOpWrite();
+                incompleteWrite(setOpWrite);
                 break;
             }
         }

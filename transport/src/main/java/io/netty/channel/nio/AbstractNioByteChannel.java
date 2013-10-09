@@ -22,6 +22,7 @@ import io.netty.channel.ChannelConfig;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.ChannelOutboundBuffer;
 import io.netty.channel.ChannelPipeline;
+import io.netty.channel.EventLoop;
 import io.netty.channel.FileRegion;
 import io.netty.channel.RecvByteBufAllocator;
 import io.netty.channel.socket.ChannelInputShutdownEvent;
@@ -35,6 +36,7 @@ import java.nio.channels.SelectionKey;
  * {@link AbstractNioChannel} base class for {@link Channel}s that operate on bytes.
  */
 public abstract class AbstractNioByteChannel extends AbstractNioChannel {
+    private Runnable flushTask;
 
     /**
      * Create a new instance
@@ -42,8 +44,8 @@ public abstract class AbstractNioByteChannel extends AbstractNioChannel {
      * @param parent            the parent {@link Channel} by which this instance was created. May be {@code null}
      * @param ch                the underlying {@link SelectableChannel} on which it operates
      */
-    protected AbstractNioByteChannel(Channel parent, SelectableChannel ch) {
-        super(parent, ch, SelectionKey.OP_READ);
+    protected AbstractNioByteChannel(Channel parent, EventLoop eventLoop, SelectableChannel ch) {
+        super(parent, eventLoop, ch, SelectionKey.OP_READ);
     }
 
     @Override
@@ -145,7 +147,7 @@ public abstract class AbstractNioByteChannel extends AbstractNioChannel {
         int writeSpinCount = -1;
 
         for (;;) {
-            Object msg = in.current();
+            Object msg = in.current(true);
             if (msg == null) {
                 // Wrote all messages.
                 clearOpWrite();
@@ -154,11 +156,13 @@ public abstract class AbstractNioByteChannel extends AbstractNioChannel {
 
             if (msg instanceof ByteBuf) {
                 ByteBuf buf = (ByteBuf) msg;
-                if (!buf.isReadable()) {
+                int readableBytes = buf.readableBytes();
+                if (readableBytes == 0) {
                     in.remove();
                     continue;
                 }
 
+                boolean setOpWrite = false;
                 boolean done = false;
                 long flushedAmount = 0;
                 if (writeSpinCount == -1) {
@@ -167,6 +171,7 @@ public abstract class AbstractNioByteChannel extends AbstractNioChannel {
                 for (int i = writeSpinCount - 1; i >= 0; i --) {
                     int localFlushedAmount = doWriteBytes(buf);
                     if (localFlushedAmount == 0) {
+                        setOpWrite = true;
                         break;
                     }
 
@@ -177,16 +182,17 @@ public abstract class AbstractNioByteChannel extends AbstractNioChannel {
                     }
                 }
 
+                in.progress(flushedAmount);
+
                 if (done) {
                     in.remove();
                 } else {
-                    // Did not write completely.
-                    in.progress(flushedAmount);
-                    setOpWrite();
+                    incompleteWrite(setOpWrite);
                     break;
                 }
             } else if (msg instanceof FileRegion) {
                 FileRegion region = (FileRegion) msg;
+                boolean setOpWrite = false;
                 boolean done = false;
                 long flushedAmount = 0;
                 if (writeSpinCount == -1) {
@@ -195,6 +201,7 @@ public abstract class AbstractNioByteChannel extends AbstractNioChannel {
                 for (int i = writeSpinCount - 1; i >= 0; i --) {
                     long localFlushedAmount = doWriteFileRegion(region);
                     if (localFlushedAmount == 0) {
+                        setOpWrite = true;
                         break;
                     }
 
@@ -205,17 +212,36 @@ public abstract class AbstractNioByteChannel extends AbstractNioChannel {
                     }
                 }
 
+                in.progress(flushedAmount);
+
                 if (done) {
                     in.remove();
                 } else {
-                    // Did not write completely.
-                    in.progress(flushedAmount);
-                    setOpWrite();
+                    incompleteWrite(setOpWrite);
                     break;
                 }
             } else {
                 throw new UnsupportedOperationException("unsupported message type: " + StringUtil.simpleClassName(msg));
             }
+        }
+    }
+
+    protected final void incompleteWrite(boolean setOpWrite) {
+        // Did not write completely.
+        if (setOpWrite) {
+            setOpWrite();
+        } else {
+            // Schedule flush again later so other tasks can be picked up in the meantime
+            Runnable flushTask = this.flushTask;
+            if (flushTask == null) {
+                flushTask = this.flushTask = new Runnable() {
+                    @Override
+                    public void run() {
+                        flush();
+                    }
+                };
+            }
+            eventLoop().execute(flushTask);
         }
     }
 

@@ -15,6 +15,7 @@
  */
 package io.netty.channel;
 
+import static io.netty.channel.DefaultChannelPipeline.logger;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.util.DefaultAttributeMap;
 import io.netty.util.Recycler;
@@ -23,8 +24,6 @@ import io.netty.util.concurrent.EventExecutorGroup;
 import io.netty.util.internal.StringUtil;
 
 import java.net.SocketAddress;
-
-import static io.netty.channel.DefaultChannelPipeline.*;
 
 final class DefaultChannelHandlerContext extends DefaultAttributeMap implements ChannelHandlerContext {
 
@@ -48,9 +47,8 @@ final class DefaultChannelHandlerContext extends DefaultAttributeMap implements 
     private Runnable invokeFlushTask;
     private Runnable invokeChannelWritableStateChangedTask;
 
-    @SuppressWarnings("unchecked")
-    DefaultChannelHandlerContext(
-            DefaultChannelPipeline pipeline, EventExecutorGroup group, String name, ChannelHandler handler) {
+    DefaultChannelHandlerContext(DefaultChannelPipeline pipeline, EventExecutorGroup group, String name,
+            ChannelHandler handler) {
 
         if (name == null) {
             throw new NullPointerException("name");
@@ -157,31 +155,6 @@ final class DefaultChannelHandlerContext extends DefaultAttributeMap implements 
     private void invokeChannelRegistered() {
         try {
             ((ChannelInboundHandler) handler).channelRegistered(this);
-        } catch (Throwable t) {
-            notifyHandlerException(t);
-        }
-    }
-
-    @Override
-    public ChannelHandlerContext fireChannelUnregistered() {
-        final DefaultChannelHandlerContext next = findContextInbound();
-        EventExecutor executor = next.executor();
-        if (executor.inEventLoop()) {
-            next.invokeChannelUnregistered();
-        } else {
-            executor.execute(new Runnable() {
-                @Override
-                public void run() {
-                    next.invokeChannelUnregistered();
-                }
-            });
-        }
-        return this;
-    }
-
-    private void invokeChannelUnregistered() {
-        try {
-            ((ChannelInboundHandler) handler).channelUnregistered(this);
         } catch (Throwable t) {
             notifyHandlerException(t);
         }
@@ -421,11 +394,6 @@ final class DefaultChannelHandlerContext extends DefaultAttributeMap implements 
     }
 
     @Override
-    public ChannelFuture deregister() {
-        return deregister(newPromise());
-    }
-
-    @Override
     public ChannelFuture bind(final SocketAddress localAddress, final ChannelPromise promise) {
         if (localAddress == null) {
             throw new NullPointerException("localAddress");
@@ -498,22 +466,25 @@ final class DefaultChannelHandlerContext extends DefaultAttributeMap implements 
     public ChannelFuture disconnect(final ChannelPromise promise) {
         validatePromise(promise, false);
 
-        // Translate disconnect to close if the channel has no notion of disconnect-reconnect.
-        // So far, UDP/IP is the only transport that has such behavior.
-        if (!channel().metadata().hasDisconnect()) {
-            findContextOutbound().invokeClose(promise);
-            return promise;
-        }
-
         final DefaultChannelHandlerContext next = findContextOutbound();
         EventExecutor executor = next.executor();
         if (executor.inEventLoop()) {
-            next.invokeDisconnect(promise);
+            // Translate disconnect to close if the channel has no notion of disconnect-reconnect.
+            // So far, UDP/IP is the only transport that has such behavior.
+            if (!channel().metadata().hasDisconnect()) {
+                next.invokeClose(promise);
+            } else {
+                next.invokeDisconnect(promise);
+            }
         } else {
             executor.execute(new Runnable() {
                 @Override
                 public void run() {
-                    next.invokeDisconnect(promise);
+                    if (!channel().metadata().hasDisconnect()) {
+                        next.invokeClose(promise);
+                    } else {
+                        next.invokeDisconnect(promise);
+                    }
                 }
             });
         }
@@ -552,34 +523,6 @@ final class DefaultChannelHandlerContext extends DefaultAttributeMap implements 
     private void invokeClose(ChannelPromise promise) {
         try {
             ((ChannelOutboundHandler) handler).close(this, promise);
-        } catch (Throwable t) {
-            notifyOutboundHandlerException(t, promise);
-        }
-    }
-
-    @Override
-    public ChannelFuture deregister(final ChannelPromise promise) {
-        validatePromise(promise, false);
-
-        final DefaultChannelHandlerContext next = findContextOutbound();
-        EventExecutor executor = next.executor();
-        if (executor.inEventLoop()) {
-            next.invokeDeregister(promise);
-        } else {
-            executor.execute(new Runnable() {
-                @Override
-                public void run() {
-                    next.invokeDeregister(promise);
-                }
-            });
-        }
-
-        return promise;
-    }
-
-    private void invokeDeregister(ChannelPromise promise) {
-        try {
-            ((ChannelOutboundHandler) handler).deregister(this, promise);
         } catch (Throwable t) {
             notifyOutboundHandlerException(t, promise);
         }
@@ -625,15 +568,10 @@ final class DefaultChannelHandlerContext extends DefaultAttributeMap implements 
         if (msg == null) {
             throw new NullPointerException("msg");
         }
+
         validatePromise(promise, true);
 
-        final DefaultChannelHandlerContext next = findContextOutbound();
-        EventExecutor executor = next.executor();
-        if (executor.inEventLoop()) {
-            next.invokeWrite(msg, promise);
-        } else {
-            submitWriteTask(next, executor, msg, false, promise);
-        }
+        write(msg, false, promise);
 
         return promise;
     }
@@ -681,31 +619,34 @@ final class DefaultChannelHandlerContext extends DefaultAttributeMap implements 
         if (msg == null) {
             throw new NullPointerException("msg");
         }
+
         validatePromise(promise, true);
 
-        final DefaultChannelHandlerContext next = findContextOutbound();
-        EventExecutor executor = next.executor();
-        if (executor.inEventLoop()) {
-            next.invokeWrite(msg, promise);
-            next.invokeFlush();
-        } else {
-            submitWriteTask(next, executor, msg, true, promise);
-        }
+        write(msg, true, promise);
 
         return promise;
     }
 
-    private void submitWriteTask(DefaultChannelHandlerContext next, EventExecutor executor,
-                                 Object msg, boolean flush, ChannelPromise promise) {
-        final int size = channel.estimatorHandle().size(msg);
-        if (size > 0) {
-            ChannelOutboundBuffer buffer = channel.unsafe().outboundBuffer();
-            // Check for null as it may be set to null if the channel is closed already
-            if (buffer != null) {
-                buffer.incrementPendingOutboundBytes(size);
+    private void write(Object msg, boolean flush, ChannelPromise promise) {
+
+        DefaultChannelHandlerContext next = findContextOutbound();
+        EventExecutor executor = next.executor();
+        if (executor.inEventLoop()) {
+            next.invokeWrite(msg, promise);
+            if (flush) {
+                next.invokeFlush();
             }
+        } else {
+            int size = channel.estimatorHandle().size(msg);
+            if (size > 0) {
+                ChannelOutboundBuffer buffer = channel.unsafe().outboundBuffer();
+                // Check for null as it may be set to null if the channel is closed already
+                if (buffer != null) {
+                    buffer.incrementPendingOutboundBytes(size);
+                }
+            }
+            executor.execute(WriteTask.newInstance(next, msg, size, flush, promise));
         }
-        executor.execute(WriteTask.newInstance(next, msg, size, flush, promise));
     }
 
     @Override

@@ -1,5 +1,5 @@
 /*
- * Copyright 2012 The Netty Project
+ * Copyright 2013 The Netty Project
  *
  * The Netty Project licenses this file to you under the Apache License,
  * version 2.0 (the "License"); you may not use this file except in compliance
@@ -13,12 +13,22 @@
  * License for the specific language governing permissions and limitations
  * under the License.
  */
-package io.netty.handler.codec.spdy;
+package io.netty.buffer;
 
-public final class SpdyConstants {
 
-    public static final int SPDY_MIN_VERSION = 2;
-    public static final int SPDY_MAX_VERSION = 3;
+import io.netty.util.internal.PlatformDependent;
+import org.junit.Assume;
+import org.junit.Before;
 
-    private SpdyConstants() { }
+public class BigEndianUnsafeDirectByteBufTest extends BigEndianDirectByteBufTest {
+
+    @Before
+    public void checkHasUnsafe() {
+        Assume.assumeTrue("sun.misc.Unsafe not found, skip tests", PlatformDependent.hasUnsafe());
+    }
+
+    @Override
+    protected ByteBuf newBuffer(int length) {
+        return new UnpooledUnsafeDirectByteBuf(UnpooledByteBufAllocator.DEFAULT, length, Integer.MAX_VALUE);
+    }
 }

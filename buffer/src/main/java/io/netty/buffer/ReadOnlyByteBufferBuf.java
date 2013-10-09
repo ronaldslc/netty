@@ -131,9 +131,7 @@ class ReadOnlyByteBufferBuf extends AbstractReferenceCountedByteBuf {
     @Override
     public ByteBuf getBytes(int index, byte[] dst, int dstIndex, int length) {
         checkDstIndex(index, length, dstIndex, dst.length);
-        if (dst == null) {
-            throw new NullPointerException("dst");
-        }
+
         if (dstIndex < 0 || dstIndex > dst.length - length) {
             throw new IndexOutOfBoundsException(String.format(
                     "dstIndex: %d, length: %d (expected: range(0, %d))", dstIndex, length, dst.length));
@@ -303,6 +301,11 @@ class ReadOnlyByteBufferBuf extends AbstractReferenceCountedByteBuf {
     @Override
     public ByteBuffer[] nioBuffers(int index, int length) {
         return new ByteBuffer[] { nioBuffer(index, length) };
+    }
+
+    @Override
+    public ByteBuffer nioBuffer(int index, int length) {
+        return (ByteBuffer) buffer.duplicate().position(index).limit(length);
     }
 
     @Override
